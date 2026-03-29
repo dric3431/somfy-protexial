@@ -1,6 +1,9 @@
+import logging
 import re
 from .abstract_api import AbstractApi
 from .const import Page, Selector, Zone
+
+_LOGGER = logging.getLogger(__name__)
 
 class ProtexialApi(AbstractApi):
     def __init__(self) -> None:
@@ -14,7 +17,7 @@ class ProtexialApi(AbstractApi):
             Page.CHALLENGE_CARD: "/fr/u_print.htm",
             Page.VERSION: "/cfg/vers",
             Page.DEFAULT: "/default.htm",
-            Page.JOURNAL: "/fr/journal.htm", # AJOUT
+            Page.JOURNAL: "/fr/journal.htm",
         }
         self.selectors = {
             Selector.CONTENT_TYPE: "meta[http-equiv='content-type']",
@@ -25,60 +28,47 @@ class ProtexialApi(AbstractApi):
         }
         self.encoding = "iso-8859-15"
 
-    def get_login_payload(self, username, password, code):
-        return {
-            "login": username,
-            "password": password,
-            "key": code,
-            "btn_login": "Connexion",
-        }
-
-    # --- NOUVELLE MÉTHODE DE PARSING ---
     def parse_journal(self, html_content):
-        """Extrait le dernier événement du journal JavaScript."""
-        dates = re.findall(r'var eventdate\s*=\s*\["(.*?)"', html_content)
-        times = re.findall(r'var eventtime\s*=\s*\["(.*?)"', html_content)
-        names = re.findall(r'var eventname\s*=\s*\["(.*?)"', html_content)
-        places = re.findall(r'var eventplace\s*=\s*\["(.*?)"', html_content)
+        """Parse les variables JS du journal Somfy Protexial."""
+        try:
+            # Nettoyage pour faciliter la regex
+            content = html_content.replace('\r', '').replace('\n', '')
+            
+            # Extraction des tableaux JS
+            def extract_first(var_name):
+                match = re.search(r'var\s+' + var_name + r'\s*=\s*\[\s*"(.*?)"', content)
+                return match.group(1) if match else None
 
-        if not (dates and times and names and places):
+            date = extract_first("eventdate")
+            time = extract_first("eventtime")
+            name = extract_first("eventname")
+            place = extract_first("eventplace")
+
+            if not name:
+                return None
+
+            # Nettoyage de l'utilisateur (ex: "Badge Ced" -> "Ced")
+            user = place.replace("Badge ", "").strip() if place else "Système"
+            
+            return {
+                "event": name,
+                "user": user,
+                "timestamp": f"{date} {time.replace('h', ':')}" if (date and time) else "Inconnu",
+                "place": place
+            }
+        except Exception as e:
+            _LOGGER.error("Erreur parsing journal: %s", e)
             return None
 
-        last_name = names[0]
-        last_place = places[0]
-        
-        # Identification simplifiée
-        user = last_place.replace("Badge ", "").strip() if "Badge" in last_place else "Système"
-        
-        event_type = "Info"
-        if "Mise ON" in last_name:
-            event_type = "Activation"
-        elif "Mise OFF" in last_name:
-            event_type = "Désactivation"
+    def get_login_payload(self, username, password, code):
+        return {"login": username, "password": password, "key": code, "btn_login": "Connexion"}
 
-        return {
-            "event_type": event_type,
-            "user": user,
-            "timestamp": f"{dates[0]} {times[0]}",
-            "full_name": last_name
-        }
-
-    # --- GARDER LE RESTE DU CODE ORIGINAL ---
     def get_reset_session_payload(self):
         return {"btn_ok": "OK"}
 
     def get_arm_payload(self, zone):
-        btnZone = ""
-        match zone:
-            case Zone.A:
-                btnZone = "btn_zone_on_A"
-            case Zone.B:
-                btnZone = "btn_zone_on_B"
-            case Zone.C:
-                btnZone = "btn_zone_on_C"
-            case Zone.ABC:
-                btnZone = "btn_zone_on_ABC"
-        return {"hidden": "hidden", btnZone: "Marche"}
+        mapping = {Zone.A: "btn_zone_on_A", Zone.B: "btn_zone_on_B", Zone.C: "btn_zone_on_C", Zone.ABC: "btn_zone_on_ABC"}
+        return {"hidden": "hidden", mapping.get(zone, "btn_zone_on_ABC"): "Marche"}
 
     def get_disarm_payload(self):
         return {"hidden": "hidden", "btn_zone_off_ABC": "Arrêt A B C"}
