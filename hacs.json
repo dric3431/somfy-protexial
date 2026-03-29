@@ -1,5 +1,5 @@
 {
   "name": "Somfy Protexial",
-  "hacs": "2.0.0",
+  "hacs": "2.0.1",
   "homeassistant": "2024.11.0"
 }
