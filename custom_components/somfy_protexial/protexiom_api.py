@@ -23,7 +23,33 @@ class ProtexiomApi(AbstractApi):
             Selector.CHALLENGE_CARD: "td:not([class])",
         }
         self.encoding = "iso-8859-15"
+    #new
+    def parse_journal(self, html_content):
+        """Parse les variables JS du journal Somfy avec support des espaces flexibles."""
+        try:
+            # Regex flexibles pour correspondre à vos logs (var x = ["..."])
+            dates = re.findall(r'var\s+eventdate\s*=\s*\[\s*"(.*?)"', html_content)
+            times = re.findall(r'var\s+eventtime\s*=\s*\[\s*"(.*?)"', html_content)
+            names = re.findall(r'var\s+eventname\s*=\s*\[\s*"(.*?)"', html_content)
+            places = re.findall(r'var\s+eventplace\s*=\s*\[\s*"(.*?)"', html_content)
 
+            if not names or not names[0]:
+                return None
+
+            user_raw = places[0] if places else "Système"
+            user_clean = user_raw.replace("Badge ", "").strip()
+            
+            return {
+                "event": names[0],
+                "user": user_clean,
+                "timestamp": f"{dates[0]} {times[0]}" if (dates and times) else "Inconnu",
+                "place": user_raw
+            }
+        except Exception as e:
+            _LOGGER.error("Erreur lors du parsing du journal : %s", e)
+            return None
+
+    #old
     def get_login_payload(self, username, password, code):
         return {
             "login": username,
