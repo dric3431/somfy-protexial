@@ -1,6 +1,6 @@
+import re
 from .abstract_api import AbstractApi
 from .const import Page, Selector, Zone
-
 
 class ProtexialApi(AbstractApi):
     def __init__(self) -> None:
@@ -14,6 +14,7 @@ class ProtexialApi(AbstractApi):
             Page.CHALLENGE_CARD: "/fr/u_print.htm",
             Page.VERSION: "/cfg/vers",
             Page.DEFAULT: "/default.htm",
+            Page.JOURNAL: "/fr/journal.htm", # AJOUT
         }
         self.selectors = {
             Selector.CONTENT_TYPE: "meta[http-equiv='content-type']",
@@ -32,6 +33,37 @@ class ProtexialApi(AbstractApi):
             "btn_login": "Connexion",
         }
 
+    # --- NOUVELLE MÉTHODE DE PARSING ---
+    def parse_journal(self, html_content):
+        """Extrait le dernier événement du journal JavaScript."""
+        dates = re.findall(r'var eventdate\s*=\s*\["(.*?)"', html_content)
+        times = re.findall(r'var eventtime\s*=\s*\["(.*?)"', html_content)
+        names = re.findall(r'var eventname\s*=\s*\["(.*?)"', html_content)
+        places = re.findall(r'var eventplace\s*=\s*\["(.*?)"', html_content)
+
+        if not (dates and times and names and places):
+            return None
+
+        last_name = names[0]
+        last_place = places[0]
+        
+        # Identification simplifiée
+        user = last_place.replace("Badge ", "").strip() if "Badge" in last_place else "Système"
+        
+        event_type = "Info"
+        if "Mise ON" in last_name:
+            event_type = "Activation"
+        elif "Mise OFF" in last_name:
+            event_type = "Désactivation"
+
+        return {
+            "event_type": event_type,
+            "user": user,
+            "timestamp": f"{dates[0]} {times[0]}",
+            "full_name": last_name
+        }
+
+    # --- GARDER LE RESTE DU CODE ORIGINAL ---
     def get_reset_session_payload(self):
         return {"btn_ok": "OK"}
 
@@ -46,7 +78,6 @@ class ProtexialApi(AbstractApi):
                 btnZone = "btn_zone_on_C"
             case Zone.ABC:
                 btnZone = "btn_zone_on_ABC"
-
         return {"hidden": "hidden", btnZone: "Marche"}
 
     def get_disarm_payload(self):
