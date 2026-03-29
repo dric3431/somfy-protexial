@@ -2,9 +2,6 @@ import asyncio
 import logging
 import re
 import string
-import html as html_lib
-import unicodedata
-
 from urllib.parse import urlencode
 from xml.etree import ElementTree as ET
 from aiohttp import ClientError, ClientSession
@@ -31,17 +28,15 @@ _PRINTABLE_CHARS = set(string.printable)
 
 
 def _fix_mojibake(text: str) -> str:
-    """Best-effort fix for accent mojibake, e.g. 'TÃ©l' -> 'Tél'."""
+    """Correction des problèmes d'accents (mojibake), ex: 'TÃ©l' -> 'Tél'."""
     try:
-        # Re-decode as if the text was incorrectly encoded in latin-1
         return text.encode("latin-1").decode("utf-8")
     except Exception:
         return text
 
 
 class Status:
-    """Container for parsed status.xml values and journal events."""
-
+    """Conteneur pour les valeurs de status.xml et les événements du journal."""
     zoneA = "off"
     zoneB = "off"
     zoneC = "off"
@@ -54,31 +49,22 @@ class Status:
     recgsm = "4"
     opegsm = "orange"
     camera = "disabled"
-    journal = None  # Contiendra le dictionnaire de l'événement (badge, heure, etc.)
+    journal = None  # Reçoit le dict: {event, user, timestamp, place}
 
     def __getitem__(self, key):
-        """Allow dict-like access (status['zoneA'])."""
         return getattr(self, key)
 
     def __str__(self):
-        """Readable dump of the status values."""
-        return f"zoneA:{self.zoneA}, zoneB:{self.zoneB}, zoneC:{self.zoneC}, battery:{self.battery}, radio:{self.radio}, door:{self.door}, alarm:{self.alarm}, box:{self.box}, gsm:{self.gsm}, recgsm:{self.recgsm}, opegsm:{self.opegsm}, camera:{self.camera}, journal:{self.journal}"
+        return (f"zoneA:{self.zoneA}, zoneB:{self.zoneB}, zoneC:{self.zoneC}, "
+                f"battery:{self.battery}, radio:{self.radio}, door:{self.door}, "
+                f"alarm:{self.alarm}, gsm:{self.gsm}, journal:{self.journal}")
 
 
 class SomfyProtexial:
-    """Main API client used by the integration to interact with the centrale."""
+    """Client API principal pour l'intégration Somfy Protexial/Protexiom."""
 
-    def __init__(
-        self,
-        session: ClientSession,
-        url,
-        api_type=None,
-        username=None,
-        password=None,
-        codes=None,
-    ) -> None:
-        """Initialize the client with HTTP session, base URL and credentials."""
-        self.url = url
+    def __init__(self, session: ClientSession, url, api_type=None, username=None, password=None, codes=None) -> None:
+        self.url = url.rstrip('/')
         self.api_type = api_type
         self.username = username
         self.password = password
@@ -87,19 +73,11 @@ class SomfyProtexial:
         self.cookie = None
         self.api = self.load_api(self.api_type)
 
-    async def __do_call(
-        self,
-        method: str,
-        page,
-        headers: dict | None = None,
-        data: dict | None = None,
-        retry: bool = True,
-        login: bool = True,
-        authenticated: bool = True,
-    ):
-        """Low-level HTTP wrapper handling cookies, error pages and retries."""
+    async def __do_call(self, method: str, page, headers: dict = None, data: dict = None, 
+                        retry: bool = True, login: bool = True, authenticated: bool = True):
         headers = {} if headers is None else dict(headers)
 
+        # Résolution du chemin de la page
         if isinstance(page, str) and page.startswith("/"):
             path = page
         else:
@@ -110,70 +88,173 @@ class SomfyProtexial:
         try:
             if self.cookie and authenticated:
                 headers["Cookie"] = self.cookie
+            
             payload = None
             if data is not None:
                 headers["Content-Type"] = "application/x-www-form-urlencoded"
                 payload = urlencode(data, encoding=self.api.get_encoding())
 
             async with asyncio.timeout(HTTP_TIMEOUT):
-                _LOGGER.debug("Call to: %s", full_path)
                 if method == "get":
                     response = await self.session.get(full_path, headers=headers)
-                elif method == "post":
-                    response = await self.session.post(full_path, data=payload, headers=headers)
                 else:
-                    raise ValueError(f"Unsupported method '{method}'")
+                    response = await self.session.post(full_path, data=payload, headers=headers)
 
-            try:
-                preview = await response.text(self.api.get_encoding())
-            except Exception:
-                preview = "<unreadable>"
+            content = await response.text(self.api.get_encoding(), errors="replace")
 
             if response.status != 200:
-                raise SomfyException(f"Http error ({response.status})")
+                raise SomfyException(f"Erreur HTTP ({response.status})")
 
-            if getattr(response.real_url, "path", "") == self.api.get_page(Page.DEFAULT) and retry:
+            # Gestion de l'expiration de session (redirection vers login/default)
+            real_path = getattr(response.real_url, "path", "")
+            if real_path == self.api.get_page(Page.DEFAULT) and retry:
                 await self.__login()
-                return await self.__do_call(
-                    method, page, headers=headers, data=data,
-                    retry=False, login=False, authenticated=authenticated
-                )
+                return await self.__do_call(method, page, headers, data, False, False, authenticated)
 
-            if getattr(response.real_url, "path", "") == self.api.get_page(Page.ERROR):
-                dom = pq(preview)
-                error_el = dom(self.api.get_selector(Selector.ERROR_CODE))
-                if not error_el:
-                    raise SomfyException("Unknown error")
-                code = error_el.text()
+            # Gestion des erreurs applicatives Somfy (codes 0x...)
+            if real_path == self.api.get_page(Page.ERROR):
+                dom = pq(content)
+                code = dom(self.api.get_selector(Selector.ERROR_CODE)).text()
 
-                if code == SomfyError.NOT_AUTHORIZED and not self.cookie and retry:
+                if code == SomfyError.NOT_AUTHORIZED and retry:
                     await self.__login()
-                    return await self.__do_call(
-                        method, page, headers=headers, data=data,
-                        retry=False, login=False, authenticated=authenticated
-                    )
+                    return await self.__do_call(method, page, headers, data, False, False, authenticated)
 
                 if code == SomfyError.SESSION_ALREADY_OPEN:
                     if retry:
-                        form = self.api.get_reset_session_payload()
-                        await self.__do_call(
-                            "post", Page.ERROR, data=form,
-                            retry=False, login=False, authenticated=False
-                        )
+                        await self.__do_call("post", Page.ERROR, data=self.api.get_reset_session_payload(), retry=False, authenticated=False)
                         self.cookie = None
-                        if login:
-                            await self.__login()
-                        return await self.__do_call(
-                            method, page, headers=headers, data=data,
-                            retry=False, login=login, authenticated=authenticated
-                        )
-                    raise SomfyException("Too many login retries")
+                        if login: await self.__login()
+                        return await self.__do_call(method, page, headers, data, False, login, authenticated)
+                    raise SomfyException("Session déjà ouverte (trop de tentatives)")
 
-                if code == SomfyError.WRONG_CREDENTIALS:
-                    raise SomfyException("Login failed: Wrong credentials")
-                if code == SomfyError.MAX_LOGIN_ATTEMPS:
-                    raise SomfyException("Login failed: Max attempt count reached")
-                if code == SomfyError.WRONG_CODE:
-                    raise SomfyException("Login failed: Wrong code")
+                if code == SomfyError.WRONG_CREDENTIALS: raise SomfyException("Identifiants incorrects")
+                if code == SomfyError.WRONG_CODE: raise SomfyException("Code carte de clés incorrect")
                 
-                raise SomfyException(f"Command failed: Unknown errorCode: {code}")
+                raise SomfyException(f"Erreur centrale: {code}")
+
+            return response
+
+        except (asyncio.TimeoutError, ClientError) as ex:
+            _LOGGER.error("Erreur de connexion vers %s: %s", path, ex)
+            raise SomfyException(f"Impossible de joindre la centrale sur {path}") from ex
+
+    async def init(self):
+        await self.__login()
+
+    def load_api(self, api_type: ApiType):
+        if api_type == ApiType.PROTEXIAL: return ProtexialApi()
+        if api_type == ApiType.PROTEXIAL_IO: return ProtexialIOApi()
+        if api_type == ApiType.PROTEXIOM: return ProtexiomApi()
+        return None
+
+    async def guess_and_set_api_type(self):
+        for api_type in [ApiType.PROTEXIAL_IO, ApiType.PROTEXIAL, ApiType.PROTEXIOM]:
+            self.api = self.load_api(api_type)
+            body = await self.do_guess_get(self.api.get_page(Page.LOGIN))
+            if body:
+                dom = pq(body)
+                challenge_el = dom(self.api.get_selector(Selector.LOGIN_CHALLENGE))
+                if challenge_el and re.match(CHALLENGE_REGEX, challenge_el.text()):
+                    self.api_type = api_type
+                    return api_type
+        raise SomfyException("Type de centrale non détecté")
+
+    async def do_guess_get(self, page) -> str:
+        try:
+            async with asyncio.timeout(2):
+                resp = await self.session.get(self.url + page, allow_redirects=False)
+                if resp.status == 200: return await resp.text()
+        except: return None
+        return None
+
+    async def __login(self):
+        self.cookie = None
+        # Récupération du challenge (ex: A1)
+        login_resp = await self.__do_call("get", Page.LOGIN, login=False)
+        dom = pq(await login_resp.text(self.api.get_encoding()))
+        challenge = dom(self.api.get_selector(Selector.LOGIN_CHALLENGE)).text()
+        
+        if not challenge: raise SomfyException("Challenge non trouvé")
+        code = self.codes.get(challenge)
+        if not code: raise SomfyException(f"Code manquant pour le challenge {challenge}")
+
+        form = self.api.get_login_payload(self.username, self.password, code)
+        resp = await self.__do_call("post", Page.LOGIN, data=form, retry=False, login=False)
+        self.cookie = resp.headers.get("SET-COOKIE")
+
+    async def get_status(self):
+        """Récupère le statut XML et le journal."""
+        # 1. XML Status
+        resp = await self.__do_call("get", Page.STATUS, authenticated=False)
+        xml_content = await resp.text(self.api.get_encoding())
+        root = ET.fromstring(xml_content)
+        status = Status()
+        
+        mapping = {
+            "defaut0": "battery", "defaut1": "radio", "defaut2": "door",
+            "defaut3": "alarm", "defaut4": "box", "zone0": "zoneA",
+            "zone1": "zoneB", "zone2": "zoneC", "gsm": "gsm",
+            "recgsm": "recgsm", "opegsm": "opegsm", "camera": "camera"
+        }
+        for child in root:
+            if child.tag in mapping:
+                setattr(status, mapping[child.tag], self.filter_ascii(child.text))
+
+        # 2. Journal (Événements récents)
+        try:
+            j_resp = await self.__do_call("get", Page.JOURNAL, authenticated=True)
+            j_html = await j_resp.text(self.api.get_encoding())
+            # Correction cruciale : on assigne le résultat au status
+            status.journal = self.api.parse_journal(j_html)
+        except Exception as ex:
+            _LOGGER.debug("Erreur lors de la récupération du journal: %s", ex)
+            status.journal = None
+
+        return status
+
+    def filter_ascii(self, value) -> str:
+        if not value: return ""
+        filtered = "".join(filter(lambda x: x in _PRINTABLE_CHARS, value))
+        return filtered.lower().strip()
+
+    async def arm(self, zone):
+        await self.__do_call("post", Page.PILOTAGE, data=self.api.get_arm_payload(zone))
+
+    async def disarm(self):
+        await self.__do_call("post", Page.PILOTAGE, data=self.api.get_disarm_payload())
+
+    async def get_elements(self) -> list[dict]:
+        """Analyse la page des éléments pour obtenir la liste des capteurs."""
+        candidates = [LIST_ELEMENTS, LIST_ELEMENTS_ALT, LIST_ELEMENTS_PRINT]
+        html = None
+        for candidate in candidates:
+            try:
+                resp = await self.__do_call("get", candidate)
+                html = await resp.text(self.api.get_encoding())
+                if "elt_name" in html: break
+            except: continue
+        
+        if not html: return []
+
+        def extract_array(name: str) -> list[str]:
+            m = re.search(rf'var\s+{name}\s*=\s*\[(.*?)\];', html, re.S | re.I)
+            if not m: return []
+            return [_fix_mojibake(p.strip().strip('"').strip("'")) for p in m.group(1).split(",")]
+
+        names = extract_array("elt_name")
+        codes = extract_array("elt_code")
+        labels = extract_array("item_label")
+        zones = extract_array("elt_zone")
+        piles = extract_array("elt_pile")
+
+        elements = []
+        for i in range(len(names)):
+            elements.append({
+                "name": names[i],
+                "code": codes[i],
+                "label": labels[i] if i < len(labels) else "",
+                "zone": zones[i] if i < len(zones) else "",
+                "battery": piles[i] if i < len(piles) else "ok"
+            })
+        return elements
