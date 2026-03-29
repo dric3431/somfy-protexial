@@ -14,6 +14,7 @@ class ProtexiomApi(AbstractApi):
             Page.CHALLENGE_CARD: "/u_print.htm",
             Page.VERSION: None,
             Page.DEFAULT: "/default.htm",
+            Page.JOURNAL: "/journal.htm",  # Ajouté pour le journal,
         }
         self.selectors = {
             Selector.CONTENT_TYPE: "meta[http-equiv='content-type']",
