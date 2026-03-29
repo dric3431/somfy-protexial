@@ -31,13 +31,16 @@ class ProtexialApi(AbstractApi):
     def parse_journal(self, html_content):
         """Parse les variables JS du journal Somfy Protexial."""
         try:
-            # Nettoyage pour faciliter la regex
-            content = html_content.replace('\r', '').replace('\n', '')
+            # On ne remplace pas les sauts de ligne, on utilise re.S (DOTALL) 
+            # pour que la regex soit plus lisible et performante.
             
-            # Extraction des tableaux JS
             def extract_first(var_name):
-                match = re.search(r'var\s+' + var_name + r'\s*=\s*\[\s*"(.*?)"', content)
-                return match.group(1) if match else None
+                # La regex explique : 
+                # var + nom + espaces éventuels + = + espaces éventuels 
+                # + [ + espaces/sauts de ligne éventuels + " + CAPTURE
+                pattern = rf'var\s+{var_name}\s*=\s*\[\s*"(.*?)"'
+                match = re.search(pattern, html_content, re.S)
+                return match.group(1).strip() if match else None
 
             date = extract_first("eventdate")
             time = extract_first("eventtime")
@@ -45,16 +48,22 @@ class ProtexialApi(AbstractApi):
             place = extract_first("eventplace")
 
             if not name:
+                _LOGGER.debug("Journal : 'eventname' non trouvé dans le HTML")
                 return None
 
-            # Nettoyage de l'utilisateur (ex: "Badge Ced" -> "Ced")
-            user = place.replace("Badge ", "").strip() if place else "Système"
+            # Nettoyage de l'utilisateur
+            # On gère le cas où place est None pour éviter les erreurs
+            source = place if place else "Système"
+            user = source.replace("Badge ", "").strip()
+            
+            # Formattage propre de l'heure (16h50 -> 16:50)
+            clean_time = time.replace('h', ':') if time else ""
             
             return {
                 "event": name,
                 "user": user,
-                "timestamp": f"{date} {time.replace('h', ':')}" if (date and time) else "Inconnu",
-                "place": place
+                "timestamp": f"{date} {clean_time}".strip() if date else "Inconnu",
+                "place": source
             }
         except Exception as e:
             _LOGGER.error("Erreur parsing journal: %s", e)
