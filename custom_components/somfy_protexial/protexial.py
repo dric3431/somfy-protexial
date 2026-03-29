@@ -296,10 +296,11 @@ class SomfyProtexial:
                 case "opegsm": status.opegsm = filteredChildText
                 case "camera": status.camera = filteredChildText
 
-        # 2. Récupération du journal (Badge/Utilisateur)
+        # 2. Récupération du journal (Badge/Utilisateur) - CORRIGÉ
         try:
+            journal_path = self.api.get_page(Page.JOURNAL)
             journal_response = await self.__do_call(
-                "get", Page.JOURNAL, login=False, authenticated=True
+                "get", journal_path, login=False, authenticated=True
             )
             journal_html = await journal_response.text(self.api.get_encoding())
             status.journal = self.api.parse_journal(journal_html)
