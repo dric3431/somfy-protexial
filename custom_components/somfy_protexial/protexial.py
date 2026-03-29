@@ -296,13 +296,17 @@ class SomfyProtexial:
                 case "opegsm": status.opegsm = filteredChildText
                 case "camera": status.camera = filteredChildText
 
-        # 2. Récupération du journal (Badge/Utilisateur) - CORRIGÉ
+        # 2. Récupération du journal (Badge/Utilisateur)
         try:
             journal_path = self.api.get_page(Page.JOURNAL)
             journal_response = await self.__do_call(
                 "get", journal_path, login=False, authenticated=True
             )
             journal_html = await journal_response.text(self.api.get_encoding())
+            
+            # LIGNE DE TEST À AJOUTER :
+            _LOGGER.debug("DEBUG JOURNAL HTML: %s", journal_html)
+            
             status.journal = self.api.parse_journal(journal_html)
         except Exception as ex:
             _LOGGER.warning("Could not fetch journal: %s", ex)
