@@ -77,14 +77,21 @@ class SomfyProtexial:
                         retry: bool = True, login: bool = True, authenticated: bool = True):
         headers = {} if headers is None else dict(headers)
 
-        # Résolution du chemin de la page
-        if isinstance(page, str) and page.startswith("/"):
+        # 1. Résolution propre du chemin (path)
+        if isinstance(page, str):
             path = page
         else:
+            # On demande à l'API de traduire l'Enum (ex: Page.JOURNAL) en string ("/fr/journal.htm")
             path = self.api.get_page(page)
 
-        full_path = f"{self.url}{path}"
+        # 2. Sécurité : on s'assure que le path commence par un "/" pour la concaténation
+        if not path.startswith("/"):
+            path = f"/{path}"
 
+        # 3. Construction de l'URL finale
+        full_path = f"{self.url}{path}"
+        
+        _LOGGER.debug("Appel vers : %s", full_path)
         try:
             if self.cookie and authenticated:
                 headers["Cookie"] = self.cookie
@@ -203,12 +210,17 @@ class SomfyProtexial:
 
         # 2. Journal (Événements récents)
         try:
+            # Utilisation correcte de Page.JOURNAL (l'énumération)
             j_resp = await self.__do_call("get", Page.JOURNAL, authenticated=True)
             j_html = await j_resp.text(self.api.get_encoding())
-            # Correction cruciale : on assigne le résultat au status
+            
+            # Appel du parser
             status.journal = self.api.parse_journal(j_html)
+            
+            _LOGGER.debug("Journal récupéré avec succès: %s", status.journal)
         except Exception as ex:
-            _LOGGER.debug("Erreur lors de la récupération du journal: %s", ex)
+            # On log l'erreur mais on ne bloque pas le reste du statut
+            _LOGGER.error("Erreur lors de la récupération du journal: %s", ex)
             status.journal = None
 
         return status
