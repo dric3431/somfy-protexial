@@ -70,7 +70,10 @@ async def async_setup_entry(
     #             options=zone_options,
     #         )
     #     )
-
+    
+    # Ajoutez ceci à la fin de async_setup_entry dans sensor.py
+    entities.append(ProtexialJournalSensor(device_info, coordinator))
+    
     if entities:
         async_add_entities(entities)
     else:
@@ -196,3 +199,35 @@ class ProtexialSensor(CoordinatorEntity, SensorEntity):
 #
 #         self._native_value = new_zone
 #         self.async_write_ha_state()
+
+
+# Ajoutez cette classe à la fin du fichier
+class ProtexialJournalSensor(CoordinatorEntity, SensorEntity):
+    """Capteur pour le journal des événements Somfy."""
+
+    def __init__(self, device_info, coordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_name = "Somfy Dernier Evénement"
+        self._attr_unique_id = f"{DOMAIN}_last_event"
+        self._attr_device_info = device_info
+        self._attr_icon = "mdi:history"
+
+    @property
+    def native_value(self):
+        """L'état du capteur est le dernier événement."""
+        journal = self.coordinator.data.get("journal")
+        if journal:
+            return journal.get("event")
+        return "Aucun événement"
+
+    @property
+    def extra_state_attributes(self):
+        """Attributs détaillés pour savoir qui a utilisé quel badge."""
+        journal = self.coordinator.data.get("journal")
+        if not journal:
+            return {}
+        return {
+            "utilisateur": journal.get("user"),
+            "horodatage": journal.get("timestamp"),
+            "source": journal.get("place")
+        }
