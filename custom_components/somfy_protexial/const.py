@@ -161,3 +161,5 @@ SENSORS = [
         "icon": "mdi:signal-2g",
     },
 ]
+
+SENSOR_JOURNAL_NAME = "Somfy Journal"
