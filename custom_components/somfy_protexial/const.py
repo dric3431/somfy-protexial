@@ -65,7 +65,7 @@ class Page(str, Enum):
     CHALLENGE_CARD = "challenge_card"
     VERSION = "version"
     DEFAULT = "default"
-
+    JOURNAL = "/fr/journal.htm"
 
 class Selector(str, Enum):
     CONTENT_TYPE = "content_type"
