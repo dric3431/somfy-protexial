@@ -31,13 +31,8 @@ class ProtexialApi(AbstractApi):
     def parse_journal(self, html_content):
         """Parse les variables JS du journal Somfy Protexial."""
         try:
-            # On ne remplace pas les sauts de ligne, on utilise re.S (DOTALL) 
-            # pour que la regex soit plus lisible et performante.
-            
             def extract_first(var_name):
-                # La regex explique : 
-                # var + nom + espaces éventuels + = + espaces éventuels 
-                # + [ + espaces/sauts de ligne éventuels + " + CAPTURE
+                # Ajout de \s* pour absorber les espaces visibles dans vos logs
                 pattern = rf'var\s+{var_name}\s*=\s*\[\s*"(.*?)"'
                 match = re.search(pattern, html_content, re.S)
                 return match.group(1).strip() if match else None
@@ -48,22 +43,15 @@ class ProtexialApi(AbstractApi):
             place = extract_first("eventplace")
 
             if not name:
-                _LOGGER.debug("Journal : 'eventname' non trouvé dans le HTML")
                 return None
 
-            # Nettoyage de l'utilisateur
-            # On gère le cas où place est None pour éviter les erreurs
-            source = place if place else "Système"
-            user = source.replace("Badge ", "").strip()
-            
-            # Formattage propre de l'heure (16h50 -> 16:50)
-            clean_time = time.replace('h', ':') if time else ""
+            user = place.replace("Badge ", "").strip() if place else "Système"
             
             return {
                 "event": name,
                 "user": user,
-                "timestamp": f"{date} {clean_time}".strip() if date else "Inconnu",
-                "place": source
+                "timestamp": f"{date} {time.replace('h', ':')}" if (date and time) else "Inconnu",
+                "place": place
             }
         except Exception as e:
             _LOGGER.error("Erreur parsing journal: %s", e)
